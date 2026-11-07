@@ -118,9 +118,59 @@ public class MONGO_PINGDiscoveryTestCase {
      */
     @Test
     public void testDisconnectAndReconnect() throws Exception {
-        String clusterName = "reconnect-" + RANDOM_CLUSTER_NAME;
+        disconnectAndReconnect("reconnect-" + RANDOM_CLUSTER_NAME, this::createFromXml);
+    }
 
-        try (JChannel first = createFromXml(); JChannel second = createFromXml()) {
+    @Test
+    public void testDiscoveryWithSharedClient() throws Exception {
+        String clusterName = "shared-" + RANDOM_CLUSTER_NAME;
+
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            discover(clusterName, () -> createWithSharedClient(sharedClient), DEFAULT_COLLECTION_NAME);
+
+            // Closed channels must not have closed the shared client
+            assertDoesNotThrow(() -> sharedClient.getDatabase(DATABASE_NAME).runCommand(new Document("ping", 1)));
+        }
+    }
+
+    @Test
+    public void testDisconnectAndReconnectWithSharedClient() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            disconnectAndReconnect("shared-reconnect-" + RANDOM_CLUSTER_NAME, () -> createWithSharedClient(sharedClient));
+
+            assertDoesNotThrow(() -> sharedClient.getDatabase(DATABASE_NAME).runCommand(new Document("ping", 1)));
+        }
+    }
+
+    /**
+     * The client is resolved in start(), so that a shared one can be set on a channel created from XML
+     * (JChannel runs init() in its constructor).
+     */
+    @Test
+    public void testOwnClientIsCreatedOnConnectNotInInit() throws Exception {
+        try (JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            assertNull(ping.getMongoClient(), "client before connect");
+
+            channel.connect("own-client-" + RANDOM_CLUSTER_NAME);
+
+            assertNotNull(ping.getMongoClient(), "client after connect");
+        }
+    }
+
+    @Test
+    public void testSetMongoClientAfterConnectIsRejected() throws Exception {
+        try (JChannel channel = createFromXml();
+             MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            channel.connect("late-client-" + RANDOM_CLUSTER_NAME);
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+
+            assertThrows(IllegalStateException.class, () -> ping.setMongoClient(sharedClient));
+        }
+    }
+
+    private void disconnectAndReconnect(String clusterName, ChannelCreator creator) throws Exception {
+        try (JChannel first = creator.create(); JChannel second = creator.create()) {
             first.connect(clusterName);
             Util.sleep(1000);
             second.connect(clusterName);
@@ -223,6 +273,13 @@ public class MONGO_PINGDiscoveryTestCase {
 
     private JChannel createFromXml() throws Exception {
         return new JChannel("org/jgroups/protocols/mongo/tcp-MONGO_PING.xml");
+    }
+
+    private JChannel createWithSharedClient(MongoClient sharedClient) throws Exception {
+        JChannel channel = createFromXml();
+        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+        ping.setMongoClient(sharedClient);
+        return channel;
     }
 
     private JChannel createProgrammatically() throws Exception {

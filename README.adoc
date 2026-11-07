@@ -134,6 +134,24 @@ JChannel channel = new JChannel(
 channel.connect("my-cluster");
 ----
 
+=== Sharing an Existing MongoClient
+
+By default the protocol creates its own `MongoClient` from `connection_url`.
+An application that already has a client (e.g., one managed by Spring) can share it, so that no second client (with its own monitoring threads and connection pool) is created.
+Set it after the channel is created and before it is connected:
+
+[source,java]
+----
+JChannel channel = new JChannel("tcp-MONGO_PING.xml");
+MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+ping.setMongoClient(mongoClient);
+channel.connect("my-cluster");
+----
+
+* `connection_url` is still required, it provides the database name.
+* A shared client is never closed by the protocol. Close it after the channel: the protocol removes the local member's entry when the channel is disconnected or closed.
+* Setting a client after the channel was connected throws `IllegalStateException`.
+
 == Building
 
 This project requires JDK 25 or higher to build.

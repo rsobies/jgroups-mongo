@@ -12,7 +12,7 @@
     <artifactId>jgroups-mongo</artifactId>
     <packaging>jar</packaging>
     <name>JGroups - Mongo</name>
-    <version>1.0.0-vt</version>
+    <version>1.0.1-vt</version>
     <url>https://www.github.com/jgroups-extras/jgroups-mongo</url>
 
     <properties>
