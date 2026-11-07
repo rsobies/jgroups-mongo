@@ -4,11 +4,13 @@ import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.LinkedList;
 import java.util.List;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
@@ -86,23 +88,44 @@ public class MONGO_PING extends JDBC_PING2 {
             throw new IllegalStateException("Database name must be specified in connection_url");
         }
         mongoClient = MongoClients.create(connectionString);
-        collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
-        super.init();
+        try {
+            collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
+            super.init();
+        } catch (Exception e) {
+            closeClient();
+            throw e;
+        }
     }
 
     protected MongoCollection<Document> getCollection() {
         return this.collection;
     }
 
+    /**
+     * Closes the client in destroy() rather than stop(): a channel can be disconnected (stop) and reconnected (start)
+     * multiple times, while init() which creates the client is only called once per stack.
+     * JDBC_PING2.stop() also still uses the client to remove the local entry.
+     */
     @Override
-    public void stop() {
-        // Postpone closing the client post JDBC_PING2.stop() which uses the client for remove()
-        super.stop();
+    public void destroy() {
+        super.destroy();
+        closeClient();
+    }
 
+    private void closeClient() {
         if (mongoClient != null) {
             mongoClient.close();
             mongoClient = null;
+            collection = null;
         }
+    }
+
+    /**
+     * MongoDB driver exceptions are unchecked, while JDBC_PING2 (e.g., write() and remove()) only handles
+     * {@link SQLException}; wrap them so failures are logged by the parent rather than propagated.
+     */
+    private static SQLException toSQLException(MongoException e) {
+        return new SQLException(e.getMessage(), e);
     }
 
     // No-op overrides otherwise inherited and called from JDBC_PING2.init()
@@ -119,6 +142,7 @@ public class MONGO_PING extends JDBC_PING2 {
 
     @Override
     protected void clearTable(String clustername) {
+        // Not called by JDBC_PING2 (its removeAll() is unsupported); overridden so it doesn't hit the null JDBC connection
         getCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
     }
 
@@ -133,7 +157,7 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected void writeToDB(PingData data, String clustername) {
+    protected void writeToDB(PingData data, String clustername) throws SQLException {
         Address address = data.getAddress();
         String addr = Util.addressToString(address);
         String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
@@ -146,7 +170,11 @@ public class MONGO_PING extends JDBC_PING2 {
                 .append(CLUSTERNAME_KEY, clustername)
                 .append(IP_KEY, ip)
                 .append(ISCOORD_KEY, data.isCoord());
-        getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        try {
+            getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        } catch (MongoException e) {
+            throw toSQLException(e);
+        }
     }
 
     @Override
@@ -191,14 +219,18 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected void delete(Connection conn, String clustername, Address addressToDelete) {
+    protected void delete(Connection conn, String clustername, Address addressToDelete) throws SQLException {
         // Ignore conn - it's null anyway
         this.delete(clustername, addressToDelete);
     }
 
     @Override
-    protected void delete(String clustername, Address addressToDelete) {
+    protected void delete(String clustername, Address addressToDelete) throws SQLException {
         String address = Util.addressToString(addressToDelete);
-        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+        try {
+            getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+        } catch (MongoException e) {
+            throw toSQLException(e);
+        }
     }
 }

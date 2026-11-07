@@ -12,7 +12,7 @@
     <artifactId>jgroups-mongo</artifactId>
     <packaging>jar</packaging>
     <name>JGroups - Mongo</name>
-    <version>1.0.0.Beta2-SNAPSHOT</version>
+    <version>1.0.0-vt</version>
     <url>https://www.github.com/jgroups-extras/jgroups-mongo</url>
 
     <properties>
@@ -22,9 +22,9 @@
 
         <!-- n.b. Only use properties for components that can be used to test different runtime versions and their combinations -->
         <!-- https://mvnrepository.com/artifact/org.jgroups/jgroups -->
-        <version.org.jgroups>5.5.7.Final</version.org.jgroups>
+        <version.org.jgroups>5.5.8.Final</version.org.jgroups>
         <!-- https://mvnrepository.com/artifact/org.mongodb/mongodb-driver-bom -->
-        <version.org.mongodb>5.12.0</version.org.mongodb>
+        <version.org.mongodb>5.14.0</version.org.mongodb>
     </properties>
 
     <description>Discovery protocol for JGroups using MongoDB as a cluster information store</description>
@@ -79,6 +79,19 @@
         <system>GitHub Actions</system>
         <url>https://github.com/jgroups-extras/jgroups-mongo/actions</url>
     </ciManagement>
+
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>jgroups-mongo</name>
+            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>
+        </repository>
+<!--        <snapshotRepository>-->
+<!--            <id>github</id>-->
+<!--            <name>GitHub Packages</name>-->
+<!--            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>-->
+<!--        </snapshotRepository>-->
+    </distributionManagement>
 
     <dependencyManagement>
         <dependencies>
