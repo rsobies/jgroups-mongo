@@ -4,6 +4,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.sql.SQLException;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.UUID;
@@ -169,6 +170,91 @@ public class MONGO_PINGDiscoveryTestCase {
         }
     }
 
+    /**
+     * Before connect there is no collection; MongoDB operations must fail with a MongoException (wrapped in
+     * SQLException where the parent expects it) rather than a NullPointerException that bypasses its handlers.
+     */
+    @Test
+    public void testOperationsBeforeConnectFailWithMongoException() throws Exception {
+        try (JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            var address = org.jgroups.util.UUID.randomUUID();
+            var data = new PingData(address, true, "node", new IpAddress("127.0.0.1", 7800));
+            String clusterName = "not-connected-" + RANDOM_CLUSTER_NAME;
+
+            assertThrows(MongoException.class, ping::getCollection);
+            assertThrows(SQLException.class, () -> ping.writeToDB(data, clusterName));
+            assertThrows(SQLException.class, () -> ping.delete(clusterName, address));
+            assertThrows(MongoException.class, () -> ping.readFromDB(clusterName));
+            assertNull(ping.getMongoClient(), "no client must be created before connect");
+        }
+    }
+
+    /**
+     * A failed start() (MongoDB unreachable) must not leave stop() throwing, which would abort stopStack() and skip
+     * destroy(), leaking the own client.
+     */
+    @Test
+    public void testCloseAfterFailedConnectReleasesOwnClient() throws Exception {
+        String unreachableUrl = "mongodb://localhost:1/" + DATABASE_NAME + "?serverSelectionTimeoutMS=500";
+        JChannel channel = createProgrammatically(unreachableUrl);
+        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+
+        assertThrows(MongoException.class, () -> channel.connect("unreachable-" + RANDOM_CLUSTER_NAME));
+        assertNotNull(ping.getMongoClient(), "own client created by the failed start");
+
+        assertDoesNotThrow(channel::close);
+        assertNull(ping.getMongoClient(), "own client released by destroy()");
+    }
+
+    /**
+     * While start() is blocked resolving the collection (MongoDB unreachable), other threads must fail fast instead
+     * of queueing up on the lock for the whole server selection timeout.
+     */
+    @Test
+    public void testConcurrentResolutionFailsFast() throws Exception {
+        String unreachableUrl = "mongodb://localhost:1/" + DATABASE_NAME + "?serverSelectionTimeoutMS=3000";
+        JChannel channel = createProgrammatically(unreachableUrl);
+        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+        var connect = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                channel.connect("concurrent-" + RANDOM_CLUSTER_NAME);
+            } catch (Exception ignored) {
+                // expected, MongoDB is unreachable
+            }
+        });
+        try {
+            // Wait until start() holds the resolution; every attempt must return immediately, not after the timeout
+            Util.waitUntil(2_000, 10, () -> {
+                long begin = System.nanoTime();
+                MongoException ex = assertThrows(MongoException.class, ping::getCollection);
+                assertTrue(System.nanoTime() - begin < 500_000_000L, "getCollection() blocked: " + ex.getMessage());
+                return ex.getMessage().contains("being resolved");
+            }, () -> "getCollection() never failed fast while start() was resolving");
+        } finally {
+            connect.join();
+            channel.close();
+        }
+    }
+
+    /**
+     * A closed channel must not keep the application's client reachable, and must not close it.
+     */
+    @Test
+    public void testCloseDropsSharedClient() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            JChannel channel = createWithSharedClient(sharedClient);
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            channel.connect("shared-close-" + RANDOM_CLUSTER_NAME);
+            assertSame(sharedClient, ping.getMongoClient());
+
+            channel.close();
+
+            assertNull(ping.getMongoClient(), "shared client reference after close");
+            assertDoesNotThrow(() -> sharedClient.getDatabase(DATABASE_NAME).runCommand(new Document("ping", 1)));
+        }
+    }
+
     private void disconnectAndReconnect(String clusterName, ChannelCreator creator) throws Exception {
         try (JChannel first = creator.create(); JChannel second = creator.create()) {
             first.connect(clusterName);
@@ -283,10 +369,14 @@ public class MONGO_PINGDiscoveryTestCase {
     }
 
     private JChannel createProgrammatically() throws Exception {
+        return createProgrammatically(connectionUrl());
+    }
+
+    private JChannel createProgrammatically(String connectionUrl) throws Exception {
         var channel = new JChannel(
                 new TCP(),
                 new MONGO_PING()
-                        .setConnectionUrl(connectionUrl())
+                        .setConnectionUrl(connectionUrl)
                         .setCollectionName(CUSTOM_COLLECTION_NAME),
                 new MERGE3(),
                 new FD_SOCK2(),

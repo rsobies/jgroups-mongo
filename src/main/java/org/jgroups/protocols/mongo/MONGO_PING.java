@@ -8,14 +8,17 @@ import java.sql.SQLException;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantLock;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientException;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import org.bson.Document;
 import org.jgroups.Address;
 import org.jgroups.PhysicalAddress;
@@ -84,11 +87,19 @@ public class MONGO_PING extends JDBC_PING2 {
         return this;
     }
 
+    // Guards mongoClient, ownsClient and active; held only briefly, never across MongoDB I/O.
+    // Locks rather than synchronized, which would pin virtual threads.
+    private final ReentrantLock clientLock = new ReentrantLock();
+    // Serializes resolution of the collection (which does MongoDB I/O); see resolveCollection()
+    private final ReentrantLock resolveLock = new ReentrantLock();
     private MongoClient mongoClient;
     // true when the client was created by this protocol (and must be closed by it), false when it was set by the application
     private boolean ownsClient;
+    // true from the first start() until destroy(); the collection is only (re)resolved while active
+    private boolean active;
     private String databaseName;
-    private MongoCollection<Document> collection;
+    // Written under clientLock, read without any lock on the fast path
+    private volatile MongoCollection<Document> collection;
 
     /**
      * Shares an existing client instead of creating one from {@code connection_url}. Must be called before the channel
@@ -98,16 +109,26 @@ public class MONGO_PING extends JDBC_PING2 {
      */
     public MONGO_PING setMongoClient(MongoClient mongoClient) {
         Objects.requireNonNull(mongoClient, "mongoClient");
-        if (this.mongoClient != null) {
-            throw new IllegalStateException("MongoClient is already set or created, it has to be set before the channel is connected");
+        clientLock.lock();
+        try {
+            if (this.mongoClient != null) {
+                throw new IllegalStateException("MongoClient is already set or created, it has to be set before the channel is connected");
+            }
+            this.mongoClient = mongoClient;
+            this.ownsClient = false;
+        } finally {
+            clientLock.unlock();
         }
-        this.mongoClient = mongoClient;
-        this.ownsClient = false;
         return this;
     }
 
     public MongoClient getMongoClient() {
-        return mongoClient;
+        clientLock.lock();
+        try {
+            return mongoClient;
+        } finally {
+            clientLock.unlock();
+        }
     }
 
     /**
@@ -127,27 +148,91 @@ public class MONGO_PING extends JDBC_PING2 {
     /**
      * Resolves the client (shared or own) and the collection on the first start. A disconnected and reconnected
      * channel (stop/start without destroy) keeps using the same client.
+     * <p>
+     * The parent is started first and a resolution failure (e.g., MongoDB unreachable) leaves the protocol active:
+     * {@code ProtocolStack.startStack()} marks the stack as started before calling start(), so a retried
+     * {@code connect()} would not call start() again. Every later MongoDB operation therefore retries the resolution
+     * via {@link #getCollection()} instead of running with no collection.
      */
     @Override
     public void start() throws Exception {
-        if (collection == null) {
-            if (mongoClient == null) {
-                mongoClient = MongoClients.create(new ConnectionString(connection_url));
-                ownsClient = true;
-            }
-            try {
-                collection = mongoClient.getDatabase(databaseName).getCollection(collection_name);
-                createCollection();
-            } catch (Exception e) {
-                releaseClient();
-                throw e;
-            }
-        }
         super.start();
+        clientLock.lock();
+        try {
+            active = true;
+        } finally {
+            clientLock.unlock();
+        }
+        resolveCollection(true);
     }
 
+    /**
+     * Returns the collection, resolving it if a previous attempt failed. Does not wait for a resolution already in
+     * progress in another thread (which can block up to the driver's server selection timeout while MongoDB is
+     * unreachable), it fails fast instead so that timer and view-handling threads do not queue up behind it.
+     *
+     * @throws MongoException if the protocol is not started (or already destroyed), another thread is resolving the
+     *                        collection, or MongoDB cannot be reached; callers wrap it so the parent logs the failure
+     *                        instead of propagating it
+     */
     protected MongoCollection<Document> getCollection() {
-        return this.collection;
+        return resolveCollection(false);
+    }
+
+    /**
+     * @param wait whether to wait for a resolution in progress in another thread (start() waits, so that a concurrent
+     *             operation cannot make connect() fail spuriously); otherwise fails fast with a MongoClientException
+     */
+    private MongoCollection<Document> resolveCollection(boolean wait) {
+        var current = collection;
+        if (current != null) {
+            return current;
+        }
+        if (wait) {
+            resolveLock.lock();
+        } else if (!resolveLock.tryLock()) {
+            throw new MongoClientException("MongoDB collection is being resolved by another thread");
+        }
+        try {
+            current = collection;
+            if (current != null) {
+                return current;
+            }
+            MongoClient client;
+            clientLock.lock();
+            try {
+                if (!active) {
+                    throw new MongoClientException("MONGO_PING is not started (channel not connected) or already destroyed");
+                }
+                if (mongoClient == null) {
+                    // Does not connect yet, the driver connects in the background
+                    mongoClient = MongoClients.create(new ConnectionString(connection_url));
+                    ownsClient = true;
+                }
+                client = mongoClient;
+            } finally {
+                clientLock.unlock();
+            }
+
+            // MongoDB I/O outside clientLock, so getMongoClient() and destroy() are not blocked by it
+            var database = client.getDatabase(databaseName);
+            createCollection(database);
+            current = database.getCollection(collection_name);
+
+            clientLock.lock();
+            try {
+                // destroy() may have released the client meanwhile; don't publish a collection of a released client
+                if (!active || mongoClient != client) {
+                    throw new MongoClientException("MONGO_PING was destroyed while resolving the MongoDB collection");
+                }
+                collection = current;
+            } finally {
+                clientLock.unlock();
+            }
+            return current;
+        } finally {
+            resolveLock.unlock();
+        }
     }
 
     /**
@@ -161,16 +246,22 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     /**
-     * Closes the client only if this protocol created it, a shared client stays open (its owner closes it).
-     * After release, a later start() resolves the client again: an own client is recreated, a shared one is reused.
+     * Closes the client only if this protocol created it, a shared client stays open (its owner closes it). Either
+     * way the protocol drops its reference, so a destroyed protocol does not keep the application's client reachable.
      */
     private void releaseClient() {
-        if (mongoClient != null && ownsClient) {
-            mongoClient.close();
+        clientLock.lock();
+        try {
+            active = false;
+            collection = null;
+            if (mongoClient != null && ownsClient) {
+                mongoClient.close();
+            }
             mongoClient = null;
             ownsClient = false;
+        } finally {
+            clientLock.unlock();
         }
-        collection = null;
     }
 
     /**
@@ -238,9 +329,9 @@ public class MONGO_PING extends JDBC_PING2 {
         // No-op.
     }
 
-    private void createCollection() {
+    private void createCollection(MongoDatabase database) {
         try {
-            mongoClient.getDatabase(databaseName).createCollection(collection_name);
+            database.createCollection(collection_name);
         } catch (MongoCommandException mex) {
             // Ignore "collection already exists" error (code 48)
             if (mex.getErrorCode() != 48) {
