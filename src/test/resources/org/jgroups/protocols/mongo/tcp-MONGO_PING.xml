@@ -1,11 +1,10 @@
 <!--
-  Formatted copy of the original jgroups-5.5.0.Final.jar!/tcp.xml reconfigured to use mongo.MONGO_PING.
+  Formatted copy of the original jgroups-5.5.8.Final.jar!/tcp.xml reconfigured to use mongo.MONGO_PING.
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:org:jgroups"
         xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups-5.5.xsd">
     <include file="${transport-config:tcp-default.xml}"/>
-    <!-- Uncomment attributes 'insert_sp' and 'call_insert_sp' if you want to use stored procedures -->
     <!-- Disable shutdown hook in tests to prevent hang:
          The shutdown hook tries to clean up MongoDB data during JVM shutdown,
          but by that point the Testcontainers MongoDB instance is already stopped,
@@ -28,9 +27,9 @@
                    max_bytes="4M"/>
     <pbcast.GMS print_local_addr="true"
                 join_timeout="2s"/>
-    <MFC max_credits="10M"
+    <MFC max_credits="2M"
          min_threshold="0.4"/>
-    <UFC max_credits="10M"
+    <UFC max_credits="2M"
          min_threshold="0.4"/>
     <FRAG2 frag_size="60K"/>
     <pbcast.STATE_TRANSFER/>

@@ -49,7 +49,11 @@ public class MONGO_PINGDiscoveryTestCase {
     public static void setUp() {
         assumeTrue(isDockerAvailable(), "Podman/Docker environment is not available - skipping tests against MongoDB container.");
 
-        mongoDBContainer = new MongoDBContainer("mongo:8.0");
+        mongoDBContainer = new MongoDBContainer("mongo:8.0")
+                // Workaround for MongoDB 8.x refusing to start on Linux kernel 6.19+ (e.g. GitHub Actions runners on 7.0.0-*-azure).
+                // See https://jira.mongodb.org/browse/SERVER-121912 and https://jira.mongodb.org/browse/SERVER-131779
+                // TODO Remove once a fixed MongoDB release (8.0.35+) is used.
+                .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1");
         mongoDBContainer.start();
 
         // Configure the protocol with the container's connection string

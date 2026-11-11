@@ -2,9 +2,7 @@
 
 = JGroups Mongo – `mongo.MONGO_PING`
 
-WARNING: This is an experimental project.
-
-Projects JGroups Mongo provides an implementation of `mongo.MONGO_PING` discovery protocol using MongoDB as a cluster information store.
+Project JGroups Mongo provides an implementation of `mongo.MONGO_PING` discovery protocol using MongoDB as a cluster information store.
 It uses the official MongoDB driver for Java.
 
 == Installation
@@ -18,7 +16,7 @@ For direct usage in JGroups via Maven, use the following coordinates:
 <dependency>
     <groupId>org.jgroups.mongo</groupId>
     <artifactId>jgroups-mongo</artifactId>
-    <version>1.0.0.Beta2</version>
+    <version>1.0.0.Final</version>
 </dependency>
 ----
 
@@ -97,9 +95,9 @@ Based on default tcp.xml with discovery replaced with mongo.MONGO_PING.
                    max_bytes="4M"/>
     <pbcast.GMS print_local_addr="true"
                 join_timeout="2s"/>
-    <MFC max_credits="10M"
+    <MFC max_credits="2M"
          min_threshold="0.4"/>
-    <UFC max_credits="10M"
+    <UFC max_credits="2M"
          min_threshold="0.4"/>
     <FRAG2 frag_size="60K"/>
     <pbcast.STATE_TRANSFER/>
@@ -175,7 +173,7 @@ To run tests with a specific JDK as runtime, pass the corresponding `javaXX.home
 
 [source,shell]
 ----
-./mvnw clean verify -Djava17.home=/path/to/jdk17 -Djava21.home=/path/to/jdk21
+./mvnw clean verify -Djava17.home=/path/to/jdk17 -Djava21.home=/path/to/jdk21 -Djava25.home=/path/to/jdk25
 ----
 
 == Reporting Issues
@@ -189,5 +187,5 @@ https://github.com/jgroups-extras/jgroups-mongo/issues
 |===
 |Version/Branch |JGroups Version |MongoDB Driver Version |JDK Baseline Version
 
-|`1.x`        |`5.5.x`           |`5.6` |17
+|`1.x`        |`5.5.x`           |`5.x` |17
 |===
