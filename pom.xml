@@ -12,7 +12,7 @@
     <artifactId>jgroups-mongo</artifactId>
     <packaging>jar</packaging>
     <name>JGroups - Mongo</name>
-    <version>1.0.1-vt</version>
+    <version>1.0.1-vt1</version>
     <url>https://www.github.com/jgroups-extras/jgroups-mongo</url>
 
     <properties>
@@ -79,19 +79,24 @@
         <system>GitHub Actions</system>
         <url>https://github.com/jgroups-extras/jgroups-mongo/actions</url>
     </ciManagement>
-
     <distributionManagement>
         <repository>
-            <id>github</id>
-            <name>jgroups-mongo</name>
-            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>
+            <id>kinguin-artifacts-projects</id>
+            <url>artifactregistry://europe-maven.pkg.dev/kinguin-artifacts/maven-projects</url>
         </repository>
-<!--        <snapshotRepository>-->
-<!--            <id>github</id>-->
-<!--            <name>GitHub Packages</name>-->
-<!--            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>-->
-<!--        </snapshotRepository>-->
     </distributionManagement>
+<!--    <distributionManagement>-->
+<!--        <repository>-->
+<!--            <id>github</id>-->
+<!--            <name>jgroups-mongo</name>-->
+<!--            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>-->
+<!--        </repository>-->
+<!--&lt;!&ndash;        <snapshotRepository>&ndash;&gt;-->
+<!--&lt;!&ndash;            <id>github</id>&ndash;&gt;-->
+<!--&lt;!&ndash;            <name>GitHub Packages</name>&ndash;&gt;-->
+<!--&lt;!&ndash;            <url>https://maven.pkg.github.com/rsobies/jgroups-mongo</url>&ndash;&gt;-->
+<!--&lt;!&ndash;        </snapshotRepository>&ndash;&gt;-->
+<!--    </distributionManagement>-->
 
     <dependencyManagement>
         <dependencies>
@@ -174,6 +179,13 @@
     </dependencies>
 
     <build>
+        <extensions>
+            <extension>
+                <groupId>com.google.cloud.artifactregistry</groupId>
+                <artifactId>artifactregistry-maven-wagon</artifactId>
+                <version>2.2.1</version>
+            </extension>
+        </extensions>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
