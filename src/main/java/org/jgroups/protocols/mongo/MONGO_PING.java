@@ -94,11 +94,16 @@ public class MONGO_PING extends JDBC_PING2 {
         return this.collection;
     }
 
+    /**
+     * Closes the client in destroy() rather than stop(): disconnecting and reconnecting a channel calls stop() and
+     * start() without init() and destroy(), and JDBC_PING2.stop() still uses the client to remove the local entry.
+     */
     @Override
-    public void stop() {
-        // Postpone closing the client post JDBC_PING2.stop() which uses the client for remove()
-        super.stop();
+    public void destroy() {
+        super.destroy();
 
+        // Don't keep handing out a collection of the closed client
+        collection = null;
         if (mongoClient != null) {
             mongoClient.close();
             mongoClient = null;
