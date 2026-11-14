@@ -63,6 +63,8 @@ public class MONGO_PINGDiscoveryTestCase {
     }
 
     public static final int CHANNEL_COUNT = 5;
+    private static final long TIMEOUT_MS = 10_000;
+    private static final long INTERVAL_MS = 100;
 
     // The cluster names need to randomized so that multiple test runs can be run in parallel.
     public static final String RANDOM_CLUSTER_NAME = UUID.randomUUID().toString();
@@ -86,6 +88,54 @@ public class MONGO_PINGDiscoveryTestCase {
     @Test
     public void testDiscoveryProgrammaticConfiguration() throws Exception {
         discover("programmatic-" + RANDOM_CLUSTER_NAME, this::createProgrammatically);
+    }
+
+    /**
+     * Disconnecting and reconnecting a channel calls stop() and start() on the protocol without init() and destroy(),
+     * so the MongoDB client must survive stop().
+     */
+    @Test
+    public void testDisconnectAndReconnect() throws Exception {
+        String clusterName = "reconnect-" + RANDOM_CLUSTER_NAME;
+
+        try (JChannel first = createFromXml(); JChannel second = createFromXml()) {
+            first.connect(clusterName);
+            Util.sleep(1000);
+            second.connect(clusterName);
+            Util.waitUntilAllChannelsHaveSameView(TIMEOUT_MS, INTERVAL_MS, first, second);
+
+            second.disconnect();
+            Util.waitUntil(TIMEOUT_MS, INTERVAL_MS, () -> first.getView().size() == 1, () -> "first channel view: " + first.getView());
+
+            second.connect(clusterName);
+
+            // stop() must not have closed the client, otherwise this fails with "state should be: open"
+            MONGO_PING ping = second.getProtocolStack().findProtocol(MONGO_PING.class);
+            assertDoesNotThrow(() -> ping.getCollection().countDocuments(), "MongoDB client is not usable after reconnect");
+
+            Util.waitUntilAllChannelsHaveSameView(TIMEOUT_MS, INTERVAL_MS, first, second);
+
+            printViews(List.of(first, second));
+            assertEquals(2, first.getView().size(), "member count");
+            assertEquals(2, second.getView().size(), "member count");
+        }
+    }
+
+    /**
+     * The client survives stop() (see testDisconnectAndReconnect), so closing the channel must close it in destroy().
+     */
+    @Test
+    public void testCloseClosesClient() throws Exception {
+        JChannel channel = createFromXml();
+        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+        channel.connect("close-" + RANDOM_CLUSTER_NAME);
+        var collection = ping.getCollection();
+
+        channel.close();
+
+        assertNull(ping.getCollection(), "collection after close");
+        IllegalStateException ex = assertThrows(IllegalStateException.class, collection::countDocuments, "client must be closed");
+        assertTrue(ex.getMessage().contains("state should be: open"), ex.getMessage());
     }
 
     private void discover(String clusterName, ChannelCreator creator) throws Exception {
